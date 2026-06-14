@@ -7,6 +7,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     npm \
     && rm -rf /var/lib/apt/lists/*
 
+RUN npm install -g @dynatrace-oss/dynatrace-mcp @dynatrace-oss/dynatrace-managed-mcp
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

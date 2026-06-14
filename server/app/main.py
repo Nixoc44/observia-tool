@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from app.config import settings
 from app.api.v1 import environments, ai_providers, analyses, recommendations, reports
@@ -37,7 +39,18 @@ async def health():
 
 @app.get("/ready")
 async def ready():
-    return {"status": "ready"}
+    checks: dict[str, str] = {}
+    try:
+        from app.db.database import engine
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        checks["db"] = "ok"
+    except Exception as e:
+        checks["db"] = f"error: {e}"
+
+    overall = "ready" if all(v == "ok" for v in checks.values()) else "degraded"
+    status_code = 200 if overall == "ready" else 503
+    return JSONResponse(content={"status": overall, **checks}, status_code=status_code)
 
 
 @app.get("/metrics")
