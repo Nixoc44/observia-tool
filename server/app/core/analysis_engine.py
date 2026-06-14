@@ -29,22 +29,23 @@ async def run_analysis(analysis_id: int) -> None:
 
         try:
             env = await env_repo.get_by_id(analysis.environment_id)
-            provider_db = await provider_repo.get_by_id(analysis.ai_provider_id)
 
             token = env_repo.get_token(env)
-            api_key = provider_repo.get_api_key(provider_db)
-
-            provider_config = AIProviderConfig(
-                provider_type=AIProviderType(provider_db.provider_type),
-                model=provider_db.model,
-                api_key=api_key,
-                endpoint=provider_db.endpoint,
-                extra_config=provider_db.extra_config or {},
-            )
-            orchestrator = AIOrchestrator(providers=[provider_config])
-            mcp_client = MCPClient(url=env.url, token=token, env_type=env.env_type)
-
-            await mcp_client.connect()
+            provider_chain = await provider_repo.get_fallback_chain(analysis.ai_provider_id)
+            provider_configs = [
+                AIProviderConfig(
+                    provider_type=AIProviderType(p.provider_type),
+                    model=p.model,
+                    api_key=provider_repo.get_api_key(p),
+                    endpoint=p.endpoint,
+                    extra_config=p.extra_config or {},
+                )
+                for p in provider_chain
+            ]
+            orchestrator = AIOrchestrator(providers=provider_configs)
+            mcp_client = await MCPClient.get_from_pool(url=env.url, token=token, env_type=env.env_type)
+            if not mcp_client.is_connected():
+                await mcp_client.connect()
 
             plugin = get_plugin(analysis.analysis_type)
             ctx = AnalysisContext(
@@ -87,7 +88,6 @@ async def run_analysis(analysis_id: int) -> None:
                     for s in agent_result.reasoning_steps
                 ],
             )
-            await mcp_client.disconnect()
 
         except Exception as e:
             logger.exception(f"Analysis {analysis_id} failed: {e}")

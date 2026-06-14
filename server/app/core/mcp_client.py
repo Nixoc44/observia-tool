@@ -1,7 +1,10 @@
 import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any
+
+from app.core.circuit_breaker import CircuitBreaker, CircuitOpenError
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +17,7 @@ class MCPConnectionError(Exception):
 # Connection pool: URL -> MCPClient instance
 _connection_pool: dict[str, "MCPClient"] = {}
 _pool_lock = asyncio.Lock()
+_mcp_circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=30)
 
 
 @dataclass
@@ -47,20 +51,23 @@ class MCPClient:
             )
 
     async def _connect_mcp(self) -> dict:
-        """Internal method to connect to MCP server via stdio.
-
-        Note: Current implementation uses npx for development.
-        In production, use pre-installed package:
-            command="dynatrace-mcp"  # or "dynatrace-managed-mcp"
-        """
+        """Internal method to connect to MCP server via stdio."""
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 
         try:
             package = "dynatrace-mcp" if self.env_type == "saas" else "dynatrace-managed-mcp"
+            use_npx = os.getenv("MCP_USE_NPX", "false").lower() == "true"
+            if use_npx:
+                command = "npx"
+                args = [f"@dynatrace-oss/{package}"]
+            else:
+                command = os.getenv("MCP_COMMAND", package)
+                args = []
+
             server_params = StdioServerParameters(
-                command="npx",
-                args=[f"@dynatrace-oss/{package}"],
+                command=command,
+                args=args,
                 env={"DT_URL": self.url, "DT_TOKEN": self.token},
             )
 
@@ -88,11 +95,16 @@ class MCPClient:
         if not self._session:
             raise MCPConnectionError("Not connected. Call connect() first.")
 
-        tool_coro = self._session.call_tool(tool_name, arguments)
-        if timeout:
-            result = await asyncio.wait_for(tool_coro, timeout=timeout)
-        else:
-            result = await tool_coro
+        async def _call():
+            tool_coro = self._session.call_tool(tool_name, arguments)
+            if timeout:
+                return await asyncio.wait_for(tool_coro, timeout=timeout)
+            return await tool_coro
+
+        try:
+            result = await _mcp_circuit_breaker.execute(_call())
+        except CircuitOpenError as e:
+            raise MCPConnectionError(str(e)) from e
         return result.content
 
     async def list_tools(self) -> list[dict]:
