@@ -9,3 +9,5 @@ cryptography==42.0.8
 python-multipart==0.0.9
 litellm==1.89.0
 mcp==1.27.2
+pytest==9.1.0
+pytest-asyncio==1.4.0
