@@ -5,9 +5,13 @@ from typing import Any
 
 import litellm
 
+from app.core.circuit_breaker import CircuitBreaker, CircuitOpenError
+
 logger = logging.getLogger(__name__)
 
 litellm.drop_params = True
+
+_ai_circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=30)
 
 
 class AIProviderType(str, Enum):
@@ -69,8 +73,11 @@ class AIOrchestrator:
                     kwargs["tools"] = tools
                 kwargs.update(provider.extra_config)
 
-                response = await litellm.acompletion(**kwargs)
+                response = await _ai_circuit_breaker.execute(litellm.acompletion(**kwargs))
                 return response.choices[0].message.content
+            except CircuitOpenError as e:
+                logger.warning(f"AI circuit open for {provider.provider_type}/{provider.model}: {e}")
+                last_error = e
             except Exception as e:
                 logger.warning(f"Provider {provider.provider_type}/{provider.model} failed: {e}")
                 last_error = e
@@ -98,12 +105,15 @@ class AIOrchestrator:
                 if provider.endpoint:
                     kwargs["api_base"] = provider.endpoint
 
-                response = await litellm.acompletion(**kwargs)
+                response = await _ai_circuit_breaker.execute(litellm.acompletion(**kwargs))
                 msg = response.choices[0].message
                 return {
                     "content": msg.content,
                     "tool_calls": msg.tool_calls or [],
                 }
+            except CircuitOpenError as e:
+                logger.warning(f"AI circuit open for {provider.provider_type}/{provider.model}: {e}")
+                last_error = e
             except Exception as e:
                 logger.warning(f"Provider {provider.provider_type}/{provider.model} failed: {e}")
                 last_error = e
