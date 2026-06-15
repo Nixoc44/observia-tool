@@ -86,6 +86,18 @@ class AIProviderRepository:
             return None
         return decrypt_value(provider.api_key_encrypted)
 
+    async def get_fallback_chain(self, primary_id: int) -> list[AIProviderDB]:
+        """Return all providers ordered by fallback_order, with primary first."""
+        result = await self.db.execute(
+            select(AIProviderDB).order_by(AIProviderDB.fallback_order)
+        )
+        providers = list(result.scalars().all())
+        primary = next((p for p in providers if p.id == primary_id), None)
+        if primary:
+            providers.remove(primary)
+            providers.insert(0, primary)
+        return providers
+
 
 class AnalysisRepository:
     def __init__(self, db: AsyncSession):
